@@ -1,0 +1,105 @@
+import 'package:flutter/material.dart';
+import 'package:skm_notification_listener/skm_notification_listener.dart';
+import 'package:http/http.dart' as http;
+import 'package:wifi_iot/wifi_iot.dart' as WiFiForIoT;
+import 'dart:developer';
+
+void main() {
+  runApp(NotificationApp());
+}
+
+class NotificationApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: NotificationScreen(),
+    );
+  }
+}
+
+class NotificationScreen extends StatefulWidget {
+  @override
+  _NotificationScreenState createState() => _NotificationScreenState();
+}
+
+class _NotificationScreenState extends State<NotificationScreen> {
+  String notificationText = "Waiting for notifications...";
+  String esp32Ssid = "ESP32_Notification";  // ESP32 AP Name
+  String esp32Password = "12345678";        // ESP32 Password
+  String esp32Ip = "http://192.168.4.1";    // Default AP IP
+
+  @override
+  void initState() {
+    super.initState();
+    _connectToESP32WiFi();
+    _checkPermission();
+    SkmNotificationListener.notificationsStream.listen((event) {
+      setState(() {
+        notificationText = "${event.title}: ${event.content}";
+      });
+      log("Notification received from ${event.packageName}");
+      _sendToESP32(event.title ?? "No Title", event.content ?? "No Content");
+    });
+  }
+
+  // Connect to ESP32 WiFi AP
+  Future<void> _connectToESP32WiFi() async {
+    try {
+      bool connected = await WiFiForIoT.WiFiForIoTPlugin.connect(
+        esp32Ssid,
+        password: esp32Password,
+        joinOnce: true, // Disconnect after sending data
+        security: WiFiForIoT.NetworkSecurity.WPA,
+      );
+
+      if (connected) {
+        log("Connected to ESP32 AP!");
+      } else {
+        log("Failed to connect to ESP32.");
+      }
+    } catch (e) {
+      log("Error connecting to ESP32: $e");
+    }
+  }
+
+  // Send notification to ESP32
+  Future<void> _sendToESP32(String title, String content) async {
+    try {
+      var url = Uri.parse("$esp32Ip/message");
+      var response = await http.post(url, body: {"title": title, "content": content});
+      log("ESP32 Response: ${response.body}");
+    } catch (e) {
+      log("Error sending to ESP32: $e");
+    }
+  }
+
+  Future<void> _checkPermission() async {
+    bool isGranted = await SkmNotificationListener.isPermissionGranted();
+    if (!isGranted) {
+      await SkmNotificationListener.requestPermission();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Notification Listener")),
+      body: Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(notificationText, textAlign: TextAlign.center),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _connectToESP32WiFi,
+                child: Text("Reconnect to ESP32"),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

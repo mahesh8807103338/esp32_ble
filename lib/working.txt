@@ -1,0 +1,79 @@
+import 'package:flutter/material.dart';
+import 'package:skm_notification_listener/skm_notification_listener.dart';
+import 'dart:developer';
+import 'dart:typed_data';
+
+void main() {
+  runApp(NotificationApp());
+}
+
+class NotificationApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: NotificationScreen(),
+    );
+  }
+}
+
+class NotificationScreen extends StatefulWidget {
+  @override
+  _NotificationScreenState createState() => _NotificationScreenState();
+}
+
+class _NotificationScreenState extends State<NotificationScreen> {
+  String notificationText = "Waiting for notifications...";
+  
+  @override
+  void initState() {
+    super.initState();
+    _checkPermission();
+    SkmNotificationListener.notificationsStream.listen((event) {
+      setState(() {
+        notificationText = "${event.title}: ${event.content}";
+      });
+      log("Notification received from ${event.packageName}");
+    });
+  }
+
+  Future<void> _checkPermission() async {
+    bool isGranted = await SkmNotificationListener.isPermissionGranted();
+    if (!isGranted) {
+      await SkmNotificationListener.requestPermission();
+    }
+  }
+
+  Future<void> _replyToNotification(event) async {
+    if (event.canReply == true) {
+      try {
+        await event.sendReply("This is an auto-response.");
+        log("Reply sent!");
+      } catch (e) {
+        log("Error sending reply: $e");
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Notification Listener")),
+      body: Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(notificationText, textAlign: TextAlign.center),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _checkPermission,
+                child: Text("Check Permission"),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

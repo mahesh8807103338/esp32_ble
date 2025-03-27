@@ -1,0 +1,202 @@
+import 'package:flutter/material.dart';
+import 'package:skm_notification_listener/skm_notification_listener.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:developer';
+
+void main() {
+  runApp(NotificationApp());
+}
+
+class NotificationApp extends StatefulWidget {
+  @override
+  _NotificationAppState createState() => _NotificationAppState();
+}
+
+class _NotificationAppState extends State<NotificationApp> {
+  String notificationText = "Waiting for notifications...";
+  BluetoothDevice? selectedDevice;
+  BluetoothCharacteristic? writeCharacteristic;
+  List<BluetoothDevice> pairedDevices = [];
+  List<BluetoothDevice> foundDevices = [];
+  bool isScanning = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _requestPermissions();
+    _checkPermissions();
+    _listPairedDevices();
+    _startListeningNotifications();
+  }
+
+  /// ✅ Request Bluetooth & Location Permissions
+  Future<void> _requestPermissions() async {
+    await Permission.bluetooth.request();
+    await Permission.bluetoothScan.request();
+    await Permission.bluetoothConnect.request();
+    await Permission.location.request();
+  }
+
+  /// ✅ Check & Request Notification Permissions
+  Future<void> _checkPermissions() async {
+    bool isGranted = await SkmNotificationListener.isPermissionGranted();
+    if (!isGranted) {
+      await SkmNotificationListener.requestPermission();
+    }
+  }
+
+  /// ✅ Fetch All Paired (Bonded) Devices
+  Future<void> _listPairedDevices() async {
+    try {
+      List<BluetoothDevice> bondedDevices = await FlutterBluePlus.bondedDevices;
+      setState(() {
+        pairedDevices = bondedDevices;
+      });
+      log("Paired Devices: ${pairedDevices.map((d) => d.name).toList()}");
+    } catch (e) {
+      log("Error getting paired devices: $e");
+    }
+  }
+
+  /// ✅ Listen for Notifications
+  void _startListeningNotifications() {
+    SkmNotificationListener.notificationsStream.listen((event) {
+      setState(() {
+        notificationText = "${event.title}: ${event.content}";
+      });
+
+      if (selectedDevice != null && writeCharacteristic != null) {
+        _sendDataToESP32("${event.title}: ${event.content}");
+      }
+    });
+  }
+
+  /// ✅ Scan for Nearby Bluetooth Devices
+  void _scanForDevices() async {
+    setState(() {
+      foundDevices.clear();
+      isScanning = true;
+    });
+
+    FlutterBluePlus.startScan(timeout: Duration(seconds: 10));
+
+    FlutterBluePlus.scanResults.listen((results) {
+      setState(() {
+        foundDevices = results.map((r) => r.device).toList();
+      });
+    });
+
+    await Future.delayed(Duration(seconds: 10));
+
+    FlutterBluePlus.stopScan();
+
+    // 🔄 Refresh paired devices after scanning
+    _listPairedDevices();
+
+    setState(() {
+      isScanning = false;
+    });
+  }
+
+  /// ✅ Connect to ESP32 (Only if Paired)
+  Future<void> _connectToDevice(BluetoothDevice device) async {
+    try {
+      bool isPaired = pairedDevices.any((d) => d.id == device.id);
+      if (!isPaired) {
+        log("Device is not paired. Please pair first in Bluetooth settings.");
+        return;
+      }
+
+      log("Connecting to ${device.name}");
+      await device.connect(timeout: Duration(seconds: 10));
+
+      List<BluetoothService> services = await device.discoverServices();
+      for (var service in services) {
+        for (var characteristic in service.characteristics) {
+          log("Checking Service: ${service.uuid}, Characteristic: ${characteristic.uuid}");
+
+          if (characteristic.properties.write) {
+            setState(() {
+              selectedDevice = device;
+              writeCharacteristic = characteristic;
+            });
+            log("Connected & Found Writable Characteristic");
+            return;
+          }
+        }
+      }
+      log("No writable characteristic found!");
+    } catch (e) {
+      log("Connection Failed: $e");
+    }
+  }
+
+  /// ✅ Send Data to ESP32
+  Future<void> _sendDataToESP32(String data) async {
+    if (writeCharacteristic != null) {
+      try {
+        await writeCharacteristic!.write(data.codeUnits);
+        log("Sent: $data");
+      } catch (e) {
+        log("Error Sending Data: $e");
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: Text("Notification to ESP32")),
+        body: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(notificationText, textAlign: TextAlign.center),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _checkPermissions,
+              child: Text("Check Notification Permission"),
+            ),
+            ElevatedButton(
+              onPressed: _listPairedDevices,
+              child: Text("Refresh Paired Devices"),
+            ),
+            ElevatedButton(
+              onPressed: _scanForDevices,
+              child: Text(isScanning ? "Scanning..." : "Scan for ESP32"),
+            ),
+            Text("Paired Devices:", style: TextStyle(fontWeight: FontWeight.bold)),
+            Expanded(
+              child: ListView.builder(
+                itemCount: pairedDevices.length,
+                itemBuilder: (context, index) {
+                  BluetoothDevice device = pairedDevices[index];
+                  return ListTile(
+                    title: Text(device.name.isNotEmpty ? device.name : "Unknown Device"),
+                    subtitle: Text(device.id.toString()),
+                    onTap: () => _connectToDevice(device),
+                  );
+                },
+              ),
+            ),
+            Text("Nearby Devices (Unpaired):", style: TextStyle(fontWeight: FontWeight.bold)),
+            Expanded(
+              child: ListView.builder(
+                itemCount: foundDevices.length,
+                itemBuilder: (context, index) {
+                  BluetoothDevice device = foundDevices[index];
+                  return ListTile(
+                    title: Text(device.name.isNotEmpty ? device.name : "Unknown Device"),
+                    subtitle: Text(device.id.toString()),
+                    onTap: () => log("Pair first from settings!"),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
